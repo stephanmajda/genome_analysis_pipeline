@@ -1,0 +1,18 @@
+name: genome_analysis_env
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.6   
+  - augustus 
+  - numpy
+  - biopython 
+  - pandas 
+  - spades
+  - canu
+  - maxbin2
+  - kraken2
+  - kmc
+  - bowtie2 
+  - smudgeplot 
+  - cd-hit 
