@@ -22,7 +22,7 @@ from _collections import defaultdict
 SAMPLES = ["1006","199hm", "AR4D6",  "Chromulina",  "Epipyxis",  "FU18K-A",  "JBC27",  "JBMS11",  "LO226KS",  "LO234KE",  "WA18K-M","DS","933-7"]  #list_of_spezies_names # "1006","199hm",  "AR4D6",  "Chromulina",  "Epipyxis",  "FU18K-A",  "JBC27",  "JBMS11",  "LO226KS",  "LO234KE",  "WA18K-M"
 non_axenic_SAMPLES = ["1006","199hm", "AR4D6",  "Chromulina",  "Epipyxis",  "FU18K-A",  "JBC27",  "JBMS11",  "LO226KS",  "LO234KE",  "WA18K-M"] #list_of_spezies_names contaminated with bacteria
 axenic_SAMPLES = ["DS","933-7","JBC07", "JBM10", "JBNZ41"]
-SAMPLES3 = set(axenic_SAMPLES+SAMPLES)
+#SAMPLES3 = set(axenic_SAMPLES+SAMPLES)
 
 Illumina_mRNA= "../raw/transcriptome/" #folder with transcriptome data
 Illumina = "../raw/illumina/"
@@ -54,7 +54,8 @@ rule canu_assembly:
     output:
         out = "../results/pacbio_sequence.txt"
     run:
-        fastq_list = subprocess.getoutput("find /media/tintri/raw/pacbio -name *merge.fastq")
+        absolute_out_path = os.path.abspath(output.out).split("pacbio_sequence.txt")[0]
+        fastq_list = subprocess.getoutput("find "+absolute_out_path+ " -name *merge.fastq")
         with open(output.out,"w") as outfile:
             outfile.write(fastq_list)
             outfile.write("\n")
@@ -82,9 +83,13 @@ rule canu_assembly:
                         size = genome_size[tmp_sample]
                     except:
                         size = 100
-                    if not os.path.exists("/media/tintri/results/canu/{}/sm_log.txt".format(tmp_sample)):
-                        shell('echo "canu genomeSize={size}m correctedErrorRate=0.105 -p {tmp_sample} -d /media/tintri/results/canu/{tmp_sample} -pacbio-raw {element}" > /media/tintri/results/canu/{tmp_sample}_sm_log.txt')
-                        shell("/media/tintri/software/canu/Linux-amd64/bin/canu genomeSize={size}m correctedErrorRate=0.105 -p {tmp_sample} -d /media/tintri/results/canu/{tmp_sample} -pacbio-raw {element}")
+                    if not os.path.exists(absolute_out_path+"/canu/{}/sm_log.txt".format(tmp_sample)):
+                        try:
+                            shell("mkdir {absolute_out_path}/canu")
+                        except:
+                            pass
+                        shell('echo "canu genomeSize={size}m correctedErrorRate=0.105 -p {tmp_sample} -d {absolute_out_path}/canu/{tmp_sample} -pacbio-raw {element}" > {absolute_out_path}/canu/{tmp_sample}_sm_log.txt')
+                        shell("canu genomeSize={size}m correctedErrorRate=0.105 -p {tmp_sample} -d {absolute_out_path}/canu/{tmp_sample} -pacbio-raw {element}")
 
 rule find_illumina_data:
     input:
@@ -92,8 +97,9 @@ rule find_illumina_data:
     output:
         temp("../results/illumina_files.txt")
     run:
+        absolute_out_path = os.path.abspath(Illumina)
         for tmp_sample in SAMPLES:
-            shell("find /media/tintri/raw/illumina/{tmp_sample}*/*1.fq* >> {output[0]}")
+            shell("find "+Illumina+"{tmp_sample}*/*1.fq* >> {output[0]}")
 
 rule SPAdes_assembly:
     input:
@@ -118,8 +124,8 @@ rule SPAdes_assembly:
                 if tmp_sample in line:
                     pacbio_file_parameter =" --pacbio " + line.strip()
                     print(pacbio_file_parameter)
-        if os.path.exists("/media/tintri/results/canu/{}/sm_log.txt".format(tmp_sample)):
-            pacbio_file_parameter = " --untrusted-contigs " + "/media/tintri/results/canu/{}/{}.contigs.fasta".format(tmp_sample,tmp_sample)
+        if os.path.exists(os.path.abspath("../results/canu/{}/sm_log.txt".format(tmp_sample))):
+            pacbio_file_parameter = " --untrusted-contigs " + "../results/canu/{}/{}.contigs.fasta".format(tmp_sample,tmp_sample)
             if meta == "--meta ":
                 with open("../results/pacbio_sequence.txt","r") as pacbio_fastq:
                     for line in pacbio_fastq:
@@ -135,7 +141,7 @@ rule SPAdes_assembly:
                         shell("mkdir ../results/spades/tmp_{tmp_sample}")
                     except:
                         pass
-                    shell("/media/tintri/software/spades/SPAdes-3.13.0-Linux/bin/spades.py -m 370 -1 {ill1} -2 {ill2} -t {threads}{pacbio_file_parameter} {meta}-o ../results/spades/tmp_{tmp_sample}")
+                    shell("spades -m 370 -1 {ill1} -2 {ill2} -t {threads}{pacbio_file_parameter} {meta}-o ../results/spades/tmp_{tmp_sample}")
                     shell("mv ../results/spades/tmp_{tmp_sample}/{{scaffolds.fasta,params.txt}} ../results/spades/{tmp_sample}/.")
                     try:
                         shell("mv ../results/spades/tmp_{tmp_sample}/warnings.log ../results/new_spades/{tmp_sample}/.")
@@ -184,7 +190,7 @@ rule MaxBin2_metagenomic_binning:
             #     ill2 = ill2.replace(".fq.gz", ".fq")
             # except:
             #     pass
-            shell("/media/tintri/software/MaxBin-2.2.5/run_MaxBin.pl -contig {input.contigs} -reads {ill1} -reads2 {ill2} -thread {threads} -reassembly -out ../results/maxbin/{tmp_sample}/{tmp_sample}")
+            shell("maxbin2 -contig {input.contigs} -reads {ill1} -reads2 {ill2} -thread {threads} -reassembly -out ../results/maxbin/{tmp_sample}/{tmp_sample}")
             shell("ls ../results/maxbin/{wildcards.sample}/{tmp_sample}.*.fasta > ../results/maxbin/{tmp_sample}/bin2.list")
         else:
             shell("touch {output[0]")
@@ -199,20 +205,20 @@ rule build_Kraken_DB:
     run:
         #shell("kraken2-build --standard --db /media/tintri/kraken/2018_11_01_kraken_DB -threads {threads}")
         try:
-            shell("mkdir /media/tintri/kraken/add_lib")
+            shell("mkdir ../kraken/add_lib")
         except:
             pass
         for axenic in axenic_SAMPLES:
             try:
-                with open("/media/tintri/results/spades/{}/scaffolds.fasta.filter".format(axenic),"r") as infile:
-                    with open("/media/tintri/kraken/add_lib/{}.fa".format(axenic),"w") as outfile:
+                with open("../results/spades/{}/scaffolds.fasta.filter".format(axenic),"r") as infile:
+                    with open("../kraken/add_lib/{}.fa".format(axenic),"w") as outfile:
                         for line in infile:
                             if line.startswith(">"):
                                 outfile.write(line.strip()+"|kraken:taxid|98651\n") # taxid from chrysophyceae
                             else:
                                 outfile.write(line)
                 try:
-                    shell("kraken2-build -db /media/tintri/kraken/2018_11_01_kraken_DB -threads {threads} --add-to-library /media/tintri/kraken/add_lib/{axenic}.fa")
+                    shell("kraken2-build -db ../kraken/2018_11_01_kraken_DB -threads {threads} --add-to-library ../kraken/add_lib/{axenic}.fa")
                 except Exception as error:
                     print(error)
             except Exception as error:
@@ -249,7 +255,8 @@ rule modify_fastq:
         #                 new_id = line.split()
         #                 line = new_id[0]+"\n"
         #             outfile.write(line)
-        shell("find /media/tintri/raw/illumina/*/*1.fq >> {output[0]}")
+        absolute_out_path = os.path.abspath(Illumina)
+        shell("find {absolute_out_path}/*/*1.fq >> {output[0]}")
 
 
 rule Kraken_pacbio_bin_classification:
@@ -262,14 +269,14 @@ rule Kraken_pacbio_bin_classification:
     run:
         tmp_sample = wildcards.sample
         if tmp_sample in non_axenic_SAMPLES:
-            if os.path.exists("/media/tintri/results/canu/{}/sm_log.txt".format(tmp_sample)):
-                pacbio= "/media/tintri/results/canu/{}/{}.contigs.fasta".format(tmp_sample, tmp_sample)
-                kraken_DB = "/media/tintri/kraken/2018_11_01_kraken_DB/"
+            if os.path.exists(os.path.abspath("../results/canu/{}/sm_log.txt".format(tmp_sample))):
+                pacbio= "./results/canu/{}/{}.contigs.fasta".format(tmp_sample, tmp_sample)
+                kraken_DB = os.path.abspath("../kraken/2018_11_01_kraken_DB/")
                 shell("kraken2 --db {kraken_DB} --use-names --threads {threads} --classified-out ../results/kraken/{tmp_sample}/pacbio_{tmp_sample}.fq --unclassified-out ../results/kraken/{tmp_sample}/pacbio_{tmp_sample}_unclassified.fq {pacbio} >> {output[0]}")
                 # WARNING: kraken2 fastq outputs for reads 1 & 2 are equal, taxid is wrong
 
                 # repeat for unassembled
-                pacbio = "/media/tintri/results/canu/{}/{}.unassembled.fasta".format(tmp_sample, tmp_sample)
+                pacbio = "../results/canu/{}/{}.unassembled.fasta".format(tmp_sample, tmp_sample)
                 shell("kraken2 --db {kraken_DB} --use-names --threads {threads} --classified-out ../results/kraken/{tmp_sample}/pacbio_{tmp_sample}_unassembled.fa --unclassified-out ../results/kraken/{tmp_sample}/pacbio_{tmp_sample}_unassembled_unclassified.fa {pacbio} >> {output[0]}_unassembled")
             else:
                 shell("touch {output[0]}")
@@ -302,7 +309,7 @@ rule Kraken_pacbio_bin_processing:
         tmp_sample = wildcards.sample
         if os.stat(input.log).st_size > 0:
             taxonomy = {}
-            with open("/media/tintri/kraken/2018_11_01_kraken_DB/taxonomy/nodes.dmp", "r") as taxonomy_graph:
+            with open("../kraken/2018_11_01_kraken_DB/taxonomy/nodes.dmp", "r") as taxonomy_graph:
                 for line in taxonomy_graph:
                     data = line.split("|")
                     sp1 = data[0].strip()
@@ -403,11 +410,11 @@ rule Kraken_bin_classification:
                 return path, taxid
             return path, taxid
 
-        kraken_DB = "/media/tintri/kraken/2018_11_01_kraken_DB/"
+        kraken_DB = os.path.abspath("../kraken/2018_11_01_kraken_DB/")
         infile = os.path.abspath(input[0])
 
         taxonomy = {}
-        with open("/media/tintri/kraken/2018_11_01_kraken_DB/taxonomy/nodes.dmp", "r") as taxonomy_graph:
+        with open("../kraken/2018_11_01_kraken_DB/taxonomy/nodes.dmp", "r") as taxonomy_graph:
             for line in taxonomy_graph:
                 data = line.split("|")
                 sp1 = data[0].strip()
@@ -460,7 +467,7 @@ rule Kraken_bin_classification:
                             contig_id = line.strip().split("\t")[1]
                             hits["U"].append(contig_id)
 
-                with open("/media/tintri/results/kraken/{}/{}.report".format(name_prefix, name), "w") as outfile:
+                with open("../results/kraken/{}/{}.report".format(name_prefix, name), "w") as outfile:
                     with open(output[0],"a") as out_statistic:
                         out_statistic.write(name + "\t")
                         total_number = 0
@@ -646,7 +653,7 @@ rule new_SPAdes_assembly:
             shell("mkdir ../results/spades/tmp_{tmp_sample}")
         except:
             pass
-        shell("/media/tintri/software/spades/SPAdes-3.13.0-Linux/bin/spades.py -m 370 -1 {input.new1} -2 {input.new2} -t {threads}{pacbio_file_parameter} -o ../results/spades/tmp_{tmp_sample}")
+        shell("spades -m 370 -1 {input.new1} -2 {input.new2} -t {threads}{pacbio_file_parameter} -o ../results/spades/tmp_{tmp_sample}")
         shell("mv ../results/spades/tmp_{tmp_sample}/{{scaffolds.fasta,params.txt}} ../results/new_spades/{tmp_sample}/.")
         try:
             shell("mv ../results/spades/tmp_{tmp_sample}/warnings.log ../results/new_spades/{tmp_sample}/.")
@@ -679,20 +686,20 @@ rule pre:
     threads: 16
     run:
         for tmp_sample in axenic_SAMPLES:
-            if not os.path.exists("/media/tintri/results/smudge/{}_k21.hist".format(tmp_sample)):
+            if not os.path.exists("../results/smudge/{}_k21.hist".format(tmp_sample)):
                 try:
                     #shell("ls /media/tintri/raw/illumina/{tmp_sample}*.fq.gz > FILES_{tmp_sample}")
                     #shell("/media/tintri/software/KMC/bin/kmc -k21 -m300 -ci1 -cs10000 -t14 @FILES_{tmp_sample} ../results/smudge/{tmp_sample}_kmer_counts /media/tintri/results/ploidy/tmp/")
-                    shell("/media/tintri/software/KMC/bin/kmc_tools transform ../results/smudge/{tmp_sample}_kmer_counts histogram ../results/smudge/{tmp_sample}_k21.hist -cx10000")
+                    shell("kmc_tools transform ../results/smudge/{tmp_sample}_kmer_counts histogram ../results/smudge/{tmp_sample}_k21.hist -cx10000")
                     #shell("gzip {tmp_sample}_kmer_counts.kmc_suf")
                 except:
                     print("Did not find raw data:")
                     print(tmp_sample)
         for tmp_sample in non_axenic_SAMPLES:
-            if not os.path.exists("/media/tintri/results/smudge/{}_k21.hist".format(tmp_sample)):
-                shell("ls /media/tintri/results/bowtie/{tmp_sample}/merge.*.fq > FILES_{tmp_sample}")
-                shell("/media/tintri/software/KMC/bin/kmc -k21 -m300 -ci1 -cs10000 -t14 @FILES_{tmp_sample} ../results/smudge/{tmp_sample}_kmer_counts /media/tintri/results/ploidy/tmp/")
-                shell("/media/tintri/software/KMC/bin/kmc_tools transform ../results/smudge/{tmp_sample}_kmer_counts histogram ../results/smudge/{tmp_sample}_k21.hist -cx10000")
+            if not os.path.exists(os.path.abspath("../results/smudge/{}_k21.hist".format(tmp_sample))):
+                shell("ls ../results/bowtie/{tmp_sample}/merge.*.fq > FILES_{tmp_sample}")
+                shell("kmc -k21 -m300 -ci1 -cs10000 -t14 @FILES_{tmp_sample} ../results/smudge/{tmp_sample}_kmer_counts ../results/ploidy/tmp/")
+                shell("kmc_tools transform ../results/smudge/{tmp_sample}_kmer_counts histogram ../results/smudge/{tmp_sample}_k21.hist -cx10000")
                 #shell("gzip {tmp_sample}_kmer_counts.kmc_suf")
 
 # rule smu:
@@ -723,7 +730,9 @@ rule gene_prediction:
     output:
         "../results/augustus/{sample}_augustus.out",
     run:
-        shell("augustus --species=arabidopsis {input[0]} --gff3=on --progress=true --singlestrand=true --AUGUSTUS_CONFIG_PATH=/media/tintri/software/Augustus/config/ --UTR=off > {output[0]}")
+        shell("augustus --species=arabidopsis {input[0]} --gff3=on --progress=true --singlestrand=true  --UTR=off > {output[0]}")
+        # possigly the augusus conifg path must be set
+        # --AUGUSTUS_CONFIG_PATH=/media/tintri/software/Augustus/config/
         #todo: remove comments from gff
 
 rule gene_extraction:
@@ -798,7 +807,7 @@ rule augustus2dna:
 
 rule pre_cd_hit:
     input:
-        augustus_file = expand("../results/augustus/{sample}_augustus_CDS.fa", sample=SAMPLES3),
+        augustus_file = expand("../results/augustus/{sample}_augustus_CDS.fa", sample=SAMPLES),
     output:
         pool = "../results/cd_hit/pool.fa",
     threads: 1
